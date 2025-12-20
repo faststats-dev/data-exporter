@@ -29,8 +29,6 @@ pub struct Project {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DataEntry {
-    pub id: Uuid,
-    pub project_id: Uuid,
     pub data: Option<serde_json::Value>,
     pub created_at: NaiveDateTime,
 }

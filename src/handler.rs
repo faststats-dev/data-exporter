@@ -52,7 +52,7 @@ pub async fn export(
     .ok_or(StatusCode::NOT_FOUND)?;
 
     let data_entries = sqlx::query_as::<_, DataEntry>(
-        "SELECT project_id, data, created_at FROM data_entries WHERE project_id = $1 ORDER BY created_at DESC"
+        "SELECT data, created_at FROM data_entries WHERE project_id = $1 ORDER BY created_at DESC"
     )
     .bind(export_request.project_id)
     .fetch_all(&state.pool)
