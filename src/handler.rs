@@ -32,7 +32,10 @@ pub async fn export(
             .bind(&token)
             .execute(&state.pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| {
+                println!("Error while deleting export request: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -42,7 +45,10 @@ pub async fn export(
     .bind(export_request.project_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|e| {
+        println!("Error while fetching project: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
     .ok_or(StatusCode::NOT_FOUND)?;
 
     let data_entries = sqlx::query_as::<_, DataEntry>(
@@ -51,15 +57,20 @@ pub async fn export(
     .bind(export_request.project_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| {
+        println!("Error while fetching data entries: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let export_data = ExportData {
         project,
         data_entries,
     };
 
-    let json_string = serde_json::to_string_pretty(&export_data)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let json_string = serde_json::to_string_pretty(&export_data).map_err(|e| {
+        println!("Error while serializing export data: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let filename = format!("project-{}-export.json", export_request.project_id);
 
