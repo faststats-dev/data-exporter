@@ -1,7 +1,8 @@
-use axum::{Router, http::StatusCode, routing::get};
+use axum::{Extension, Router, http::StatusCode, routing::get};
 use sqlx::postgres::PgPoolOptions;
 mod handler;
 mod models;
+mod rate_limit;
 
 #[tokio::main]
 async fn main() {
@@ -16,9 +17,22 @@ async fn main() {
 
     let state = models::AppState { pool };
 
+    let rate_limiter = rate_limit::RateLimiter::new(10, 60);
+
+    let cleanup_limiter = rate_limiter.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            cleanup_limiter.cleanup().await;
+        }
+    });
+
     let app = Router::new()
         .route("/v1/health", get(|| async { (StatusCode::OK, "OK") }))
         .route("/v1/export/{token}", get(handler::export))
+        .layer(axum::middleware::from_fn(rate_limit::rate_limit_middleware))
+        .layer(Extension(rate_limiter))
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")
