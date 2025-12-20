@@ -32,9 +32,3 @@ pub struct DataEntry {
     pub data: Option<serde_json::Value>,
     pub created_at: NaiveDateTime,
 }
-
-#[derive(Debug, Serialize)]
-pub struct ExportData {
-    pub project: Project,
-    pub data_entries: Vec<DataEntry>,
-}
