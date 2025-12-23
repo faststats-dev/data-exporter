@@ -1,10 +1,12 @@
 use chrono::NaiveDateTime;
+use s3::Bucket;
 use serde::Serialize;
 use sqlx::{PgPool, types::Uuid};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub s3_bucket: Bucket,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

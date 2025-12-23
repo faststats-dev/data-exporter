@@ -1,13 +1,10 @@
 use crate::models::{AppState, DataEntry, ExportRequest, Project};
+use crate::s3_helpers;
 use bytes::Bytes;
 
 use axum::{
-    body::Body,
     extract::{Path, State},
-    http::{
-        StatusCode,
-        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
-    },
+    http::{StatusCode, header::LOCATION},
     response::{IntoResponse, Response},
 };
 use futures::stream::StreamExt;
@@ -43,10 +40,44 @@ pub async fn export(
         return Err(StatusCode::NOT_FOUND);
     }
 
+    let s3_key = format!("exports/{}.json", token);
+
+    let file_exists = s3_helpers::check_file_exists(&state.s3_bucket, &s3_key)
+        .await
+        .map_err(|e| {
+            println!("Error checking S3 file existence: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !file_exists {
+        let export_data = generate_export_data(&state, export_request.project_id).await?;
+
+        s3_helpers::upload_file(&state.s3_bucket, &s3_key, export_data)
+            .await
+            .map_err(|e| {
+                println!("Error uploading to S3: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    }
+
+    let presigned_url = s3_helpers::generate_presigned_url(&state.s3_bucket, &s3_key, 300)
+        .await
+        .map_err(|e| {
+            println!("Error generating presigned URL: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok((StatusCode::FOUND, [(LOCATION, presigned_url.as_str())]).into_response())
+}
+
+async fn generate_export_data(
+    state: &AppState,
+    project_id: sqlx::types::Uuid,
+) -> Result<Bytes, StatusCode> {
     let project = sqlx::query_as::<_, Project>(
         "SELECT id, name, token, slug, private, template_id, created_at, owner_id FROM project WHERE id = $1"
     )
-    .bind(export_request.project_id)
+    .bind(project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(|e| {
@@ -55,60 +86,38 @@ pub async fn export(
     })?
     .ok_or(StatusCode::NOT_FOUND)?;
 
-    let project_json = serde_json::to_string(&project).map_err(|e| {
-        println!("Error while serializing project: {:?}", e);
+    let mut data_entries = Vec::new();
+    let mut row_stream = sqlx::query(
+        "SELECT data, created_at FROM data_entries WHERE project_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(project_id)
+    .fetch(&state.pool);
+
+    while let Some(row) = row_stream.next().await {
+        match row {
+            Ok(row) => {
+                let data_entry = DataEntry {
+                    data: row.try_get("data").ok(),
+                    created_at: row.get("created_at"),
+                };
+                data_entries.push(data_entry);
+            }
+            Err(e) => {
+                println!("Error while streaming data entry: {:?}", e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+    }
+
+    let export_data = serde_json::json!({
+        "project": project,
+        "data_entries": data_entries
+    });
+
+    let json_string = serde_json::to_string_pretty(&export_data).map_err(|e| {
+        println!("Error while serializing export data: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let filename = format!("project-{}-export.json", export_request.project_id);
-    let project_id = export_request.project_id;
-
-    let stream = async_stream::stream! {
-        yield Ok::<_, std::io::Error>(Bytes::from(format!("{{\"project\":{},\"data_entries\":[", project_json)));
-
-        let mut row_stream = sqlx::query("SELECT data, created_at FROM data_entries WHERE project_id = $1 ORDER BY created_at DESC")
-            .bind(project_id)
-            .fetch(&state.pool);
-
-        let mut first = true;
-        while let Some(row) = row_stream.next().await {
-            match row {
-                Ok(row) => {
-                    let data_entry = DataEntry {
-                        data: row.try_get("data").ok(),
-                        created_at: row.get("created_at"),
-                    };
-
-                    if let Ok(entry_json) = serde_json::to_string(&data_entry) {
-                        if !first {
-                            yield Ok(Bytes::from(","));
-                        }
-                        first = false;
-                        yield Ok(Bytes::from(entry_json));
-                    }
-                }
-                Err(e) => {
-                    println!("Error while streaming data entry: {:?}", e);
-                    break;
-                }
-            }
-        }
-
-        yield Ok(Bytes::from("]}"));
-    };
-
-    let body = Body::from_stream(stream);
-
-    Ok((
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, "application/json"),
-            (
-                CONTENT_DISPOSITION,
-                &format!("attachment; filename=\"{}\"", filename),
-            ),
-        ],
-        body,
-    )
-        .into_response())
+    Ok(Bytes::from(json_string))
 }
