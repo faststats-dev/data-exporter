@@ -1,21 +1,22 @@
-use axum::{Extension, Router, http::StatusCode, routing::get};
-use s3::{Bucket, Region, creds::Credentials};
+use axum::{http::StatusCode, routing::get, Extension, Router};
+use s3::{creds::Credentials, Bucket, Region};
 use sqlx::postgres::PgPoolOptions;
 mod handler;
 mod models;
 mod rate_limit;
-mod s3_helpers;
 
 #[tokio::main]
 async fn main() {
-    #[cfg(debug_assertions)]
-    dotenvy::dotenv().ok();
+    let _ = dotenvy::dotenv();
 
     let database_url = std::env::var("DATABASE_URL")
         .expect("DATABASE_URL must be set in .env file or environment variables");
 
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(8))
+        .idle_timeout(std::time::Duration::from_secs(60))
+        .max_lifetime(std::time::Duration::from_secs(600))
         .connect(&database_url)
         .await
         .expect("Failed to connect to database");
@@ -45,8 +46,9 @@ async fn main() {
             .expect("Invalid S3_REGION")
     };
 
-    let s3_bucket =
-        *Bucket::new(&bucket_name, region, credentials).expect("Failed to create S3 bucket");
+    let s3_bucket = *Bucket::new(&bucket_name, region, credentials)
+        .expect("Failed to create S3 bucket")
+        .with_path_style();
 
     let state = models::AppState { pool, s3_bucket };
 
