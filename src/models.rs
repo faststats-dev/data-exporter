@@ -1,7 +1,7 @@
 use chrono::NaiveDateTime;
 use s3::Bucket;
 use serde::Serialize;
-use sqlx::{PgPool, types::Uuid};
+use sqlx::{types::Uuid, PgPool};
 
 #[derive(Clone)]
 pub struct AppState {
