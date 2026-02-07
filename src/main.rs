@@ -1,6 +1,7 @@
 use axum::{http::StatusCode, routing::get, Extension, Router};
 use s3::{creds::Credentials, Bucket, Region};
 use sqlx::postgres::PgPoolOptions;
+use tower_http::decompression::RequestDecompressionLayer;
 mod handler;
 mod models;
 mod rate_limit;
@@ -66,6 +67,7 @@ async fn main() {
     let app = Router::new()
         .route("/v1/health", get(|| async { (StatusCode::OK, "OK") }))
         .route("/v1/export/{token}", get(handler::export))
+        .layer(RequestDecompressionLayer::new())
         .layer(axum::middleware::from_fn(rate_limit::rate_limit_middleware))
         .layer(Extension(rate_limiter))
         .with_state(state);
